@@ -7,6 +7,7 @@ const ejemploV3 = require('./partida-v3.json');
 const ejemploV4 = require('./partida-v4.json');
 const ejemploV5 = require('./partida-v5.json');
 const ejemploV8 = require('./partida-v8.json');
+const ejemploV9 = require('./partida-v9.json');
 
 // El mismo JWT que usa el resto del servidor (middleware `protect`).
 const SECRETO = 'secreto-de-prueba';
@@ -165,6 +166,39 @@ describe('Incursiones montado en Deck Tracker', () => {
       const r = await llamar('POST', '/partidas', { usuario, cuerpo: partida });
       expect(r.estado).toBe(400);
     }
+  });
+
+  test('guarda una partida v9 (3 jugadores con 3 Pokémon cada uno)', async () => {
+    const usuario = '64b00000000000000000000a';
+    const partida = {
+      ...structuredClone(ejemploV9),
+      partidaId: 'ejemplo-v9-derrota',
+      cuentas: [usuario, ...ejemploV9.cuentas.slice(1)],
+    };
+    const guardada = await llamar('POST', '/partidas', { usuario, cuerpo: partida });
+    expect(guardada.estado).toBe(201);
+    const detalle = await llamar('GET', `/partidas/${partida.partidaId}`, { usuario });
+    expect(detalle.json.registro.version).toBe(9);
+  });
+
+  test('en v9 pokemonPerdidos llega a 3 y no más; la v8 sigue en 2', async () => {
+    const usuario = '64b00000000000000000000b';
+    const con = (version, perdidos, id) => {
+      const partida = {
+        ...structuredClone(ejemploV9),
+        version,
+        partidaId: id,
+        cuentas: [usuario, ...ejemploV9.cuentas.slice(1)],
+      };
+      partida.resumen.jugadores[0].pokemonPerdidos = perdidos;
+      return partida;
+    };
+    const tres = await llamar('POST', '/partidas', { usuario, cuerpo: con(9, 3, 'v9-tres-perdidos') });
+    expect(tres.estado).toBe(201);
+    const cuatro = await llamar('POST', '/partidas', { usuario, cuerpo: con(9, 4, 'v9-cuatro-perdidos') });
+    expect(cuatro.estado).toBe(400);
+    const v8 = await llamar('POST', '/partidas', { usuario, cuerpo: con(8, 3, 'v8-tres-perdidos') });
+    expect(v8.estado).toBe(400);
   });
 
   test('una cuenta que no juega la partida recibe 403', async () => {
