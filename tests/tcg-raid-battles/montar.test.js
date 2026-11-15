@@ -8,6 +8,7 @@ const ejemploV4 = require('./partida-v4.json');
 const ejemploV5 = require('./partida-v5.json');
 const ejemploV8 = require('./partida-v8.json');
 const ejemploV9 = require('./partida-v9.json');
+const ejemploV10 = require('./partida-v10.json');
 
 // El mismo JWT que usa el resto del servidor (middleware `protect`).
 const SECRETO = 'secreto-de-prueba';
@@ -179,6 +180,19 @@ describe('Incursiones montado en Deck Tracker', () => {
     expect(guardada.estado).toBe(201);
     const detalle = await llamar('GET', `/partidas/${partida.partidaId}`, { usuario });
     expect(detalle.json.registro.version).toBe(9);
+  });
+
+  test('guarda una partida v10 (estados en los aliados)', async () => {
+    const usuario = '64b00000000000000000000c';
+    const partida = {
+      ...structuredClone(ejemploV10),
+      partidaId: 'ejemplo-v10-derrota',
+      cuentas: [usuario, ...ejemploV10.cuentas.slice(1)],
+    };
+    const guardada = await llamar('POST', '/partidas', { usuario, cuerpo: partida });
+    expect(guardada.estado).toBe(201);
+    const detalle = await llamar('GET', `/partidas/${partida.partidaId}`, { usuario });
+    expect(detalle.json.registro.version).toBe(10);
   });
 
   test('en v9 pokemonPerdidos llega a 3 y no más; la v8 sigue en 2', async () => {
