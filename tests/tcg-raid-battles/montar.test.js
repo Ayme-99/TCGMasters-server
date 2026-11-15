@@ -9,6 +9,7 @@ const ejemploV5 = require('./partida-v5.json');
 const ejemploV8 = require('./partida-v8.json');
 const ejemploV9 = require('./partida-v9.json');
 const ejemploV10 = require('./partida-v10.json');
+const ejemploV11 = require('./partida-v11.json');
 
 // El mismo JWT que usa el resto del servidor (middleware `protect`).
 const SECRETO = 'secreto-de-prueba';
@@ -193,6 +194,39 @@ describe('Incursiones montado en Deck Tracker', () => {
     expect(guardada.estado).toBe(201);
     const detalle = await llamar('GET', `/partidas/${partida.partidaId}`, { usuario });
     expect(detalle.json.registro.version).toBe(10);
+  });
+
+  test('guarda una partida v11 (4 Pokémon con 2 jugadores)', async () => {
+    const usuario = '64b00000000000000000000d';
+    const partida = {
+      ...structuredClone(ejemploV11),
+      partidaId: 'ejemplo-v11-derrota',
+      cuentas: [usuario, ...ejemploV11.cuentas.slice(1)],
+    };
+    const guardada = await llamar('POST', '/partidas', { usuario, cuerpo: partida });
+    expect(guardada.estado).toBe(201);
+    const detalle = await llamar('GET', `/partidas/${partida.partidaId}`, { usuario });
+    expect(detalle.json.registro.version).toBe(11);
+  });
+
+  test('en v11 pokemonPerdidos llega a 4 y no más; la v10 sigue en 3', async () => {
+    const usuario = '64b00000000000000000000e';
+    const con = (version, perdidos, id) => {
+      const partida = {
+        ...structuredClone(ejemploV11),
+        version,
+        partidaId: id,
+        cuentas: [usuario, ...ejemploV11.cuentas.slice(1)],
+      };
+      partida.resumen.jugadores[0].pokemonPerdidos = perdidos;
+      return partida;
+    };
+    const cuatro = await llamar('POST', '/partidas', { usuario, cuerpo: con(11, 4, 'v11-cuatro-perdidos') });
+    expect(cuatro.estado).toBe(201);
+    const cinco = await llamar('POST', '/partidas', { usuario, cuerpo: con(11, 5, 'v11-cinco-perdidos') });
+    expect(cinco.estado).toBe(400);
+    const v10 = await llamar('POST', '/partidas', { usuario, cuerpo: con(10, 4, 'v10-cuatro-perdidos') });
+    expect(v10.estado).toBe(400);
   });
 
   test('en v9 pokemonPerdidos llega a 3 y no más; la v8 sigue en 2', async () => {
