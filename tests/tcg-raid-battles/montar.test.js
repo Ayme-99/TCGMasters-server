@@ -10,6 +10,7 @@ const ejemploV8 = require('./partida-v8.json');
 const ejemploV9 = require('./partida-v9.json');
 const ejemploV10 = require('./partida-v10.json');
 const ejemploV11 = require('./partida-v11.json');
+const ejemploV12 = require('./partida-v12.json');
 
 // El mismo JWT que usa el resto del servidor (middleware `protect`).
 const SECRETO = 'secreto-de-prueba';
@@ -207,6 +208,25 @@ describe('Incursiones montado en Deck Tracker', () => {
     expect(guardada.estado).toBe(201);
     const detalle = await llamar('GET', `/partidas/${partida.partidaId}`, { usuario });
     expect(detalle.json.registro.version).toBe(11);
+  });
+
+  test('guarda una partida v12 (modo de preparación) y rechaza una sin modo', async () => {
+    const usuario = '64b00000000000000000000f';
+    const partida = {
+      ...structuredClone(ejemploV12),
+      partidaId: 'ejemplo-v12-derrota',
+      cuentas: [usuario, ...ejemploV12.cuentas.slice(1)],
+    };
+    const guardada = await llamar('POST', '/partidas', { usuario, cuerpo: partida });
+    expect(guardada.estado).toBe(201);
+    const detalle = await llamar('GET', `/partidas/${partida.partidaId}`, { usuario });
+    expect(detalle.json.registro.version).toBe(12);
+
+    const sinModo = structuredClone(partida);
+    sinModo.partidaId = 'ejemplo-v12-sin-modo';
+    delete sinModo.eventos.find((e) => e.tipo === 'configurarJugadores').modoPreparacion;
+    const rechazada = await llamar('POST', '/partidas', { usuario, cuerpo: sinModo });
+    expect(rechazada.estado).toBe(400);
   });
 
   test('en v11 pokemonPerdidos llega a 4 y no más; la v10 sigue en 3', async () => {
