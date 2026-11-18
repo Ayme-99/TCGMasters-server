@@ -233,6 +233,7 @@ Ambos comparten 5 estructuras posibles (`structure`): `swiss`, `swiss_eliminatio
 Backend del Game Master de Incursiones (repo [TCG-Raid-Battles](https://github.com/Ayme-99/TCG-Raid-Battles)). Reutiliza las cuentas, el JWT y la base de este servidor; no hay servicio aparte.
 
 - `src/modules/tcg-raid-battles/` es el módulo **tal como sale del otro repo**: no se edita aquí (ver `ORIGEN.md`). Se actualiza con `node server/scripts/exportar.js <este repo>/src/modules/tcg-raid-battles` desde TCG-Raid-Battles.
+- **Salas de Incursiones (partida con varios dispositivos):** `POST /api/incursiones/salas` (con sesión) crea una sala y devuelve su código; el WebSocket está en `/api/incursiones/ws` y el primer mensaje (`hola`) lleva el mismo JWT, nunca en la URL. El estado de las salas vive **en memoria** (se pierde al reiniciar o desplegar: no desplegar con partidas en curso) y solo funciona con **una instancia**. `app.js` lo monta con `montarWebSocketIncursiones(servidor, incursiones)` sobre el servidor que devuelve `app.listen`. Protocolo en `src/modules/tcg-raid-battles/contrato/sala/`.
 - `src/modules/tcg-raid-battles/montar.js` es lo único propio de Deck Tracker: usa `protect` (el id sale de `req.userId`), comprueba las cuentas contra el modelo `User` y crea el repositorio de MongoDB, con sus índices, en la primera petición.
 - Colecciones nuevas: `incursiones_partidas` e `incursiones_partida_jugadores`.
 - El cuerpo de estas rutas admite hasta 1 MB (un registro de partida lleva todos los eventos).

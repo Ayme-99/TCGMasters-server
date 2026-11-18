@@ -5,9 +5,12 @@
 // de MongoDB. Este archivo es de este servidor; el resto de src/modules/tcg-raid-battles/
 // se regenera desde el repo de Incursiones (ver ORIGEN.md).
 const mongoose = require('mongoose');
+const jwt = require('jsonwebtoken');
 const protect = require('../usuarios/middleware/authMiddleware');
 const User = require('../usuarios/models/User');
-const { crearRouter, crearRepoMongo, crearRepoMemoria } = require('./index');
+const {
+  crearRouter, crearRepoMongo, crearRepoMemoria, crearSalas, montarSalas,
+} = require('./index');
 
 // El módulo pide el repositorio al crear el router, pero la conexión de
 // Mongoose se abre después de arrancar. Este repositorio espera a la
@@ -42,18 +45,57 @@ async function cuentasQueFaltan(ids) {
   return ids.filter((id) => !hay.has(id));
 }
 
-// Las opciones solo se cambian en los tests.
+// Nombre de usuario de una cuenta, o null si no existe.
+async function nombreDeCuenta(id) {
+  if (!mongoose.isValidObjectId(id)) return null;
+  const usuario = await User.findById(id).select('username').lean();
+  return usuario ? usuario.username : null;
+}
+
+// Verifica el token de sesión que llega en el primer mensaje del WebSocket
+// (el mismo JWT y el mismo secreto que `protect`). Devuelve la cuenta y su
+// nombre, o null si el token no vale o la cuenta ya no existe.
+function crearVerificadorToken({ buscarNombre = nombreDeCuenta } = {}) {
+  return async (token) => {
+    try {
+      const { userId } = jwt.verify(token, process.env.JWT_SECRET);
+      if (!userId) return null;
+      const cuentaId = String(userId);
+      const nombre = await buscarNombre(cuentaId);
+      return nombre ? { cuentaId, nombre } : null;
+    } catch {
+      return null;
+    }
+  };
+}
+
+// Las opciones solo se cambian en los tests. El router lleva las salas
+// (`router.salas`) para que el WebSocket use las mismas.
 function montarIncursiones({
   repo = repoPerezoso(mongoose.connection),
   autenticar = protect,
   existenCuentas = cuentasQueFaltan,
+  salas = crearSalas(),
 } = {}) {
-  return crearRouter({
+  const router = crearRouter({
     repo,
     autenticar,
     usuarioDe: (req) => (req.userId ? String(req.userId) : undefined),
     existenCuentas,
+    salas,
   });
+  router.salas = salas;
+  return router;
+}
+
+// WebSocket de las salas (`/api/incursiones/ws`) sobre el servidor HTTP que
+// devuelve `app.listen`. Hay que llamarlo con el router de `montarIncursiones`.
+function montarWebSocketIncursiones(servidor, router, {
+  verificarToken = crearVerificadorToken(),
+} = {}) {
+  return montarSalas({ servidor, salas: router.salas, verificarToken });
 }
 
 module.exports = montarIncursiones;
+module.exports.montarWebSocketIncursiones = montarWebSocketIncursiones;
+module.exports.crearVerificadorToken = crearVerificadorToken;

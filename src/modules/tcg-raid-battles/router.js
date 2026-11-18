@@ -71,6 +71,8 @@ function resumenDeFila(f) {
  * @param {Function} [o.existenCuentas] async (ids) → ids que no existen
  * @param {Function} [o.validar]  (registro) → errores del esquema
  * @param {Function} [o.ahora]    () → Date, para los tests
+ * @param {object} [o.salas]     crearSalas(); si se pasa, añade POST /salas (D-19 §D7)
+ * @param {Function} [o.nombreDe] (req) → nombre que ven los demás en la sala
  */
 function crearRouter({
   repo,
@@ -79,6 +81,8 @@ function crearRouter({
   existenCuentas = async () => [],
   validar = crearValidador(),
   ahora = () => new Date(),
+  salas = null,
+  nombreDe = (req) => req.cuentaId,
 }) {
   if (!repo || typeof autenticar !== 'function') {
     throw new Error('crearRouter necesita repo y autenticar');
@@ -95,11 +99,23 @@ function crearRouter({
     return next();
   });
 
+  // Crea una sala; quien la crea es el host (asiento 0). El WebSocket (ws.js)
+  // se conecta después con el código.
+  if (salas) {
+    router.post('/salas', (req, res) => {
+      const r = salas.crear(req.cuentaId, String(nombreDe(req) || req.cuentaId));
+      if (!r.ok) {
+        return error(res, 409, 'ya_en_sala', 'esta cuenta ya está en una sala', { codigo: r.codigo });
+      }
+      return res.status(201).json({ codigo: r.sala.codigo });
+    });
+  }
+
   const asincrono = (fn) => (req, res, next) => fn(req, res).catch(next);
 
   // Guarda una partida terminada. Idempotente por partidaId.
   router.post('/partidas', asincrono(async (req, res) => {
-    const registro = req.body;
+    let registro = req.body;
     if (!registro || typeof registro !== 'object' || Array.isArray(registro)) {
       return error(res, 400, 'estructura_invalida', 'el cuerpo debe ser un registro de partida');
     }
@@ -112,6 +128,11 @@ function crearRouter({
     if (errores.length > 0) {
       return error(res, 400, 'estructura_invalida', 'el registro no cumple el esquema', { errores });
     }
+    // Partida de una sala: las cuentas las pone el servidor (D-19 §D8), no el
+    // cliente, así todos guardan el mismo registro y nadie se anota una cuenta
+    // ajena. Quien no volvió a tiempo va a null y no cobra.
+    const deSala = salas ? salas.cuentasDe(registro.partidaId) : null;
+    if (deSala) registro = { ...registro, cuentas: deSala };
     if (!registro.cuentas || !registro.cuentas.includes(req.cuentaId)) {
       return error(res, 403, 'no_participas', 'tu cuenta no figura en las cuentas de la partida');
     }

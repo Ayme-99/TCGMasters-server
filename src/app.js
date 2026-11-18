@@ -13,6 +13,7 @@ const cardCatalogRoutes = require('./modules/deck-tracker/routes/cardCatalogRout
 const friendRoutes = require('./modules/usuarios/routes/friendRoutes');
 const tournamentInviteRoutes = require('./modules/deck-tracker/routes/tournamentInviteRoutes');
 const montarIncursiones = require('./modules/tcg-raid-battles/montar');
+const { montarWebSocketIncursiones } = montarIncursiones;
 
 const app = express();
 connectDB();
@@ -48,7 +49,10 @@ app.use('/api/tournaments', tournamentRoutes);
 app.use('/api/cards', cardCatalogRoutes);
 app.use('/api/friends', friendRoutes);
 app.use('/api/tournament-invites', tournamentInviteRoutes);
-app.use('/api/incursiones', montarIncursiones());
+const incursiones = montarIncursiones();
+app.use('/api/incursiones', incursiones);
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
+const servidor = app.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
+// Salas de Incursiones: WebSocket en /api/incursiones/ws (estado en memoria).
+montarWebSocketIncursiones(servidor, incursiones);
