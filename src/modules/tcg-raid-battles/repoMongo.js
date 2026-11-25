@@ -8,16 +8,38 @@
 // por eso un reintento no puede sumar dos veces.
 const COLECCION_PARTIDAS = 'incursiones_partidas';
 const COLECCION_JUGADORES = 'incursiones_partida_jugadores';
+// Partida de campaña guardada en la cuenta (#478): una por cuenta y campaña,
+// `_id` = `${cuentaId}:${campana}`.
+const COLECCION_GUARDADOS_CAMPANA = 'incursiones_campana_partidas';
+// Hitos de campaña abonados (#374): uno por cuenta, campaña, partida e id.
+const COLECCION_HITOS_CAMPANA = 'incursiones_campana_hitos';
+// Tienda de puntos (#374, D-21 §1.2): una por cuenta, `_id` = cuentaId, con lo
+// gastado, los productos, las compras y los niveles de jefe desbloqueados
+// para siempre.
+const COLECCION_TIENDA = 'incursiones_tienda_cuentas';
 
 function crearRepoMongo(db) {
   const partidas = db.collection(COLECCION_PARTIDAS);
   const jugadores = db.collection(COLECCION_JUGADORES);
+  const hitos = db.collection(COLECCION_HITOS_CAMPANA);
+  const guardados = db.collection(COLECCION_GUARDADOS_CAMPANA);
+  const tiendas = db.collection(COLECCION_TIENDA);
+  const tiendaVacia = () => ({ gastado: 0, productos: [], niveles: [], compras: [] });
+  const deTienda = (doc) => (doc
+    ? { gastado: doc.gastado, productos: doc.productos, niveles: doc.niveles, compras: doc.compras }
+    : tiendaVacia());
+  const sinId = (doc) => {
+    if (!doc) return null;
+    const { _id, ...resto } = doc;
+    return resto;
+  };
 
   return {
     // Llamar una vez al arrancar.
     async asegurarIndices() {
       await jugadores.createIndex({ partidaId: 1, asiento: 1 }, { unique: true });
       await jugadores.createIndex({ cuentaId: 1, guardadaEn: -1, partidaId: -1 });
+      await hitos.createIndex({ cuentaId: 1 });
     },
 
     async guardarPartida({ partida, jugadores: filas }) {
@@ -85,7 +107,129 @@ function crearRepoMongo(db) {
         .toArray();
       return { puntos: r ? r.puntos : 0, partidas: r ? r.partidas : 0 };
     },
+
+    async obtenerGuardadoCampana(cuentaId, campana) {
+      return sinId(await guardados.findOne({ _id: `${cuentaId}:${campana}` }));
+    },
+
+    // Atómico: la revisión va en el filtro, así dos dispositivos no se pisan.
+    async guardarGuardadoCampana({ cuentaId, campana, revisionBase, partida, actualizadaEn }) {
+      const _id = `${cuentaId}:${campana}`;
+      const nuevo = { cuentaId, campana, revision: revisionBase + 1, actualizadaEn, partida };
+      if (revisionBase === 0) {
+        try {
+          await guardados.insertOne({ _id, ...nuevo });
+          return { ok: true, guardado: nuevo };
+        } catch (e) {
+          if (!(e && e.code === 11000)) throw e;
+          return { ok: false, actual: sinId(await guardados.findOne({ _id })) };
+        }
+      }
+      const hecho = await guardados.findOneAndUpdate(
+        { _id, revision: revisionBase },
+        { $set: nuevo },
+        { returnDocument: 'after' },
+      );
+      if (hecho) return { ok: true, guardado: sinId(hecho) };
+      return { ok: false, actual: sinId(await guardados.findOne({ _id })) };
+    },
+
+    // `_id` = `${cuentaId}:${campana}:${partida}:${id}`: el mismo hito no se abona dos
+    // veces aunque lleguen dos envíos a la vez ($setOnInsert con upsert).
+    async abonarHitosCampana({ cuentaId, campana, partida, hitos: lista, abonadoEn }) {
+      const idDe = (h) => `${cuentaId}:${campana}:${partida}:${h.id}`;
+      const ya = new Map(
+        (await hitos.find({ _id: { $in: lista.map(idDe) } }).toArray()).map((d) => [d._id, d]),
+      );
+      const distintos = [];
+      const repetidos = [];
+      const nuevos = [];
+      for (const h of lista) {
+        const d = ya.get(idDe(h));
+        if (!d) nuevos.push(h.id);
+        else if (d.tipo === h.tipo && d.puntos === h.puntos) repetidos.push(h.id);
+        else distintos.push({ id: h.id, tipo: d.tipo, puntos: d.puntos });
+      }
+      if (distintos.length > 0) return { nuevos: [], repetidos: [], distintos };
+      if (nuevos.length > 0) {
+        const r = await hitos.bulkWrite(
+          lista.filter((h) => nuevos.includes(h.id)).map((h) => ({
+            updateOne: {
+              filter: { _id: idDe(h) },
+              update: {
+                $setOnInsert: {
+                  cuentaId, campana, partida, hitoId: h.id, tipo: h.tipo, puntos: h.puntos, abonadoEn,
+                },
+              },
+              upsert: true,
+            },
+          })),
+          { ordered: false },
+        );
+        // Si otro envío se adelantó con alguno, ese pasa a repetido.
+        const insertados = new Set(Object.values(r.upsertedIds || {}).map(String));
+        const tarde = nuevos.filter((id) => !insertados.has(idDe({ id })));
+        return { nuevos: nuevos.filter((id) => !tarde.includes(id)), repetidos: [...repetidos, ...tarde], distintos };
+      }
+      return { nuevos, repetidos, distintos };
+    },
+
+    async puntosCampanaDe(cuentaId) {
+      const [r] = await hitos
+        .aggregate([
+          { $match: { cuentaId } },
+          { $group: { _id: null, puntos: { $sum: '$puntos' }, hitos: { $sum: 1 } } },
+        ])
+        .toArray();
+      return { puntos: r ? r.puntos : 0, hitos: r ? r.hitos : 0 };
+    },
+
+    async tiendaDe(cuentaId) {
+      return deTienda(await tiendas.findOne({ _id: cuentaId }));
+    },
+
+    // Atómico: el saldo, el id de la compra y si ya tiene el producto van en el
+    // filtro, así dos compras a la vez no gastan más de lo que hay.
+    async comprarEnTienda({ cuentaId, compra, producto, precio, unico, ganados, niveles, compradaEn }) {
+      try {
+        await tiendas.updateOne(
+          { _id: cuentaId },
+          { $setOnInsert: { cuentaId, ...tiendaVacia() } },
+          { upsert: true },
+        );
+      } catch (e) {
+        if (!(e && e.code === 11000)) throw e; // otra compra la creó a la vez
+      }
+      const nueva = { id: compra, producto, precio, compradaEn };
+      const hecho = await tiendas.findOneAndUpdate(
+        {
+          _id: cuentaId,
+          'compras.id': { $ne: compra },
+          gastado: { $lte: ganados - precio },
+          ...(unico ? { productos: { $ne: producto } } : {}),
+        },
+        {
+          $inc: { gastado: precio },
+          $addToSet: { productos: producto, niveles: { $each: niveles } },
+          $push: { compras: nueva },
+        },
+        { returnDocument: 'after' },
+      );
+      if (hecho) return { ok: true, repetida: false, compra: nueva };
+      const t = deTienda(await tiendas.findOne({ _id: cuentaId }));
+      const ya = t.compras.find((c) => c.id === compra);
+      if (ya) {
+        return ya.producto === producto
+          ? { ok: true, repetida: true, compra: ya }
+          : { ok: false, motivo: 'compra_distinta', compra: ya };
+      }
+      if (unico && t.productos.includes(producto)) return { ok: false, motivo: 'ya_comprado' };
+      return { ok: false, motivo: 'puntos_insuficientes' };
+    },
   };
 }
 
-module.exports = { crearRepoMongo, COLECCION_PARTIDAS, COLECCION_JUGADORES };
+module.exports = {
+  crearRepoMongo, COLECCION_PARTIDAS, COLECCION_JUGADORES, COLECCION_GUARDADOS_CAMPANA,
+  COLECCION_HITOS_CAMPANA, COLECCION_TIENDA,
+};
