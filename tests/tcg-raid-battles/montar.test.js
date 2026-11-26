@@ -301,3 +301,47 @@ describe('Incursiones montado en Deck Tracker', () => {
     expect(r.json.error).toBe('no_participas');
   });
 });
+
+describe('Campaña y tienda montadas en Deck Tracker (#374, #478)', () => {
+  const usuario = '64b0000000000000000000c1';
+
+  test('guarda la partida de campaña en la cuenta con revisión', async () => {
+    expect((await llamar('GET', '/campana/partidas/kanto', { usuario })).estado).toBe(404);
+    // El ejemplo válido del contrato (contrato/campana/ejemplos/guardado).
+    const { partida } = require('./campana-guardado.json');
+    const guardada = await llamar('PUT', '/campana/partidas/kanto', {
+      usuario, cuerpo: { version: 1, revision: 0, partida },
+    });
+    expect(guardada.estado).toBe(200);
+    expect(guardada.json.revision).toBe(1);
+    const otra = await llamar('PUT', '/campana/partidas/kanto', {
+      usuario, cuerpo: { version: 1, revision: 0, partida },
+    });
+    expect(otra.estado).toBe(409);
+    expect(otra.json.error).toBe('revision_distinta');
+  });
+
+  test('los hitos suman al total y la compra lo baja', async () => {
+    const hitos = await llamar('POST', '/campana/hitos', {
+      usuario,
+      cuerpo: {
+        version: 1,
+        campana: 'kanto',
+        partida: 'p1',
+        hitos: [{ id: 'gimnasio-brock', tipo: 'medalla', puntos: 1500 }],
+      },
+    });
+    expect(hitos.estado).toBe(200);
+    expect(hitos.json.abonados).toEqual(['gimnasio-brock']);
+    const tienda = await llamar('GET', '/tienda', { usuario });
+    expect(tienda.json.productos.find((p) => p.id === 'moneda-serie').precio).toBe(800);
+    const compra = await llamar('POST', '/tienda/compras', {
+      usuario, cuerpo: { version: 1, compra: 'c1', producto: 'moneda-serie' },
+    });
+    expect(compra.estado).toBe(201);
+    expect(compra.json.puntos).toBe(700);
+    const puntos = await llamar('GET', '/me/puntos', { usuario });
+    expect(puntos.json.puntos).toBe(700);
+    expect(puntos.json.puntosGastados).toBe(800);
+  });
+});

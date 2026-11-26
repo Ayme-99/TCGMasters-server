@@ -5,6 +5,10 @@
 function crearRepoMemoria() {
   const partidas = new Map();
   const filas = new Map(); // `${partidaId}:${asiento}` → fila
+  const guardados = new Map(); // `${cuentaId}:${campana}` → partida de campaña
+  const hitos = new Map(); // `${cuentaId}:${campana}:${partida}:${id}` → hito de campaña
+  const tiendas = new Map(); // cuentaId → { gastado, productos, niveles, compras }
+  const tiendaVacia = () => ({ gastado: 0, productos: [], niveles: [], compras: [] });
 
   return {
     async guardarPartida({ partida, jugadores }) {
@@ -50,6 +54,89 @@ function crearRepoMemoria() {
         if (f.abonado) puntos += f.puntos + (f.bonoEstados ?? 0);
       }
       return { puntos, partidas: partidasJugadas };
+    },
+
+    // Partida de campaña de la cuenta (#478), o null.
+    async obtenerGuardadoCampana(cuentaId, campana) {
+      const g = guardados.get(`${cuentaId}:${campana}`);
+      return g ? structuredClone(g) : null;
+    },
+
+    // Guarda si la revisión guardada es `revisionBase` (0 si no había) y la
+    // sube en 1. Si no, { ok: false, actual }.
+    async guardarGuardadoCampana({ cuentaId, campana, revisionBase, partida, actualizadaEn }) {
+      const clave = `${cuentaId}:${campana}`;
+      const actual = guardados.get(clave) ?? null;
+      if ((actual ? actual.revision : 0) !== revisionBase) {
+        return { ok: false, actual: actual ? structuredClone(actual) : null };
+      }
+      const nuevo = { cuentaId, campana, revision: revisionBase + 1, actualizadaEn, partida: structuredClone(partida) };
+      guardados.set(clave, nuevo);
+      return { ok: true, guardado: structuredClone(nuevo) };
+    },
+
+    // Abona los hitos de campaña que no estaban (#374). Si alguno ya estaba
+    // con otro tipo o puntos, no abona nada y lo devuelve en `distintos`.
+    async abonarHitosCampana({ cuentaId, campana, partida, hitos: lista, abonadoEn }) {
+      const clave = (h) => `${cuentaId}:${campana}:${partida}:${h.id}`;
+      const distintos = [];
+      const repetidos = [];
+      const nuevos = [];
+      for (const h of lista) {
+        const ya = hitos.get(clave(h));
+        if (!ya) nuevos.push(h.id);
+        else if (ya.tipo === h.tipo && ya.puntos === h.puntos) repetidos.push(h.id);
+        else distintos.push({ id: h.id, tipo: ya.tipo, puntos: ya.puntos });
+      }
+      if (distintos.length > 0) return { nuevos: [], repetidos: [], distintos };
+      for (const h of lista) {
+        if (nuevos.includes(h.id)) {
+          hitos.set(clave(h), {
+            cuentaId, campana, partida, hitoId: h.id, tipo: h.tipo, puntos: h.puntos, abonadoEn,
+          });
+        }
+      }
+      return { nuevos, repetidos, distintos };
+    },
+
+    // Suma de los hitos de campaña de la cuenta, de todas las campañas.
+    async puntosCampanaDe(cuentaId) {
+      let puntos = 0;
+      let cuantos = 0;
+      for (const h of hitos.values()) {
+        if (h.cuentaId !== cuentaId) continue;
+        puntos += h.puntos;
+        cuantos += 1;
+      }
+      return { puntos, hitos: cuantos };
+    },
+
+    // Lo comprado en la tienda por la cuenta (#374, D-21 §1.2).
+    async tiendaDe(cuentaId) {
+      return structuredClone(tiendas.get(cuentaId) ?? tiendaVacia());
+    },
+
+    // Una compra: baja el total (`gastado` sube) y deja para siempre los
+    // niveles de jefe ya alcanzados (opción C de Ayme, 2026-11-25). Idempotente
+    // por `compra`. `ganados` es lo ganado por la cuenta (incursiones + campaña).
+    async comprarEnTienda({ cuentaId, compra, producto, precio, unico, ganados, niveles, compradaEn }) {
+      const t = tiendas.get(cuentaId) ?? tiendaVacia();
+      const ya = t.compras.find((c) => c.id === compra);
+      if (ya) {
+        return ya.producto === producto
+          ? { ok: true, repetida: true, compra: structuredClone(ya) }
+          : { ok: false, motivo: 'compra_distinta', compra: structuredClone(ya) };
+      }
+      if (unico && t.productos.includes(producto)) return { ok: false, motivo: 'ya_comprado' };
+      if (ganados - t.gastado < precio) return { ok: false, motivo: 'puntos_insuficientes' };
+      const nueva = { id: compra, producto, precio, compradaEn };
+      t.gastado += precio;
+      if (!t.productos.includes(producto)) t.productos.push(producto);
+      for (const n of niveles) if (!t.niveles.includes(n)) t.niveles.push(n);
+      t.niveles.sort((a, b) => a - b);
+      t.compras.push(nueva);
+      tiendas.set(cuentaId, t);
+      return { ok: true, repetida: false, compra: structuredClone(nueva) };
     },
   };
 }

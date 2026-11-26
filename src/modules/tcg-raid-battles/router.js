@@ -8,7 +8,9 @@ function listaDeVersiones(versiones) {
   return `${versiones.slice(0, -1).join(', ')} y ${versiones[versiones.length - 1]}`;
 }
 const { comprobarCoherencia, abonos } = require('./coherencia');
-const { COSTE_DESBLOQUEO } = require('./puntos');
+const { rutasTienda, puntosDeCuenta } = require('./tienda');
+const { rutasGuardadoCampana } = require('./guardadoCampana');
+const { rutasHitosCampana } = require('./hitosCampana');
 
 const LIMITE_POR_DEFECTO = 20;
 const LIMITE_MAXIMO = 50;
@@ -212,20 +214,28 @@ function crearRouter({
     });
   }));
 
-  // Puntos acumulados y a qué jefes da acceso (los puntos no se gastan).
+  // Puntos de la cuenta y a qué jefes da acceso (D-21 §1.2). Hay un solo
+  // total: suman las incursiones y los hitos de la campaña, y comprar en la
+  // tienda lo baja. Un jefe ya desbloqueado no vuelve a bloquearse (opción C,
+  // decidida por Ayme el 2026-11-25, #374).
   router.get('/me/puntos', asincrono(async (req, res) => {
-    const { puntos, partidas } = await repo.puntosDe(req.cuentaId);
+    const p = await puntosDeCuenta(repo, req.cuentaId);
     return res.json({
-      puntos,
-      partidas,
-      niveles: Object.entries(COSTE_DESBLOQUEO).map(([nivel, coste]) => ({
-        nivel: Number(nivel),
-        coste,
-        alcanzado: puntos >= coste,
-        faltan: Math.max(0, coste - puntos),
-      })),
+      puntos: p.puntos,
+      partidas: p.partidas,
+      puntosIncursiones: p.puntosIncursiones,
+      puntosCampana: p.puntosCampana,
+      puntosGastados: p.puntosGastados,
+      niveles: p.niveles,
     });
   }));
+
+  // Partida de campaña guardada en la cuenta (#478).
+  router.use(rutasGuardadoCampana({ repo, ahora, error }));
+  // Puntos de la campaña por hitos y catálogo de la tienda (#374).
+  router.use(rutasHitosCampana({ repo, ahora, error }));
+  // Compras en la tienda de puntos (#374, D-21 §1.2).
+  router.use(rutasTienda({ repo, ahora, error }));
 
   // Errores del propio router (JSON mal formado, cuerpo demasiado grande).
   // eslint-disable-next-line no-unused-vars
